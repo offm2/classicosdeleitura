@@ -178,7 +178,12 @@ class ReadingApp(App):
         self.reading_screen = ReadingScreen(app_ref=self, name='reading_screen')
         self.sm.add_widget(self.reading_screen)
         
+        # 1. Load the data into variables
         self.load_book_data(self.current_book_key)
+
+        # 2. FORCE the UI to update as soon as the app starts
+        Clock.schedule_once(lambda dt: self.update_content(), 0.5)
+        
         return self.sm
 
     def change_book_by_key(self, key):

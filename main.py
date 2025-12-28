@@ -182,7 +182,7 @@ class ReadingApp(App):
         self.load_book_data(self.current_book_key)
 
         # 2. FORCE the UI to update as soon as the app starts
-        Clock.schedule_once(lambda dt: self.update_content(), 0.5)
+        Clock.schedule_once(lambda dt: self.update_content(), 1.0)
         
         return self.sm
 
@@ -205,40 +205,96 @@ class ReadingApp(App):
         self.content_label.font_size = dp(self.font_size)
 
     def load_book_data(self, key):
-        book = BOOKS[key]
-        self.reading_screen.title_label.text = book['name']
-        try:
-            if os.path.exists(book['path']):
-                tree = ET.parse(book['path'])
-                self.root_xml = tree.getroot()
-                # Determine total pages based on p{n} tags
-                self.total_pages = len([n for n in self.root_xml.iter() if n.tag.startswith('p')])
+            book = BOOKS[key]
+            self.reading_screen.title_label.text = book.get('name', 'Livro')
+            
+            try:
+                with open(book['path'], 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+
+                import re
+                # 1. Extract raw pages from XML tags
+                raw_pages = re.findall(r'<p\d+>(.*?)</p\d+>', content, re.DOTALL)
                 
+                if not raw_pages:
+                    raw_pages = [content]
+
+                # 2. CHUNKING LOGIC with Sentence Respect
+                self.book_pages = []
+                target_limit = 2500  # Target characters per screen
+                
+                for page_text in raw_pages:
+                    remaining_text = page_text.strip()
+                    
+                    while len(remaining_text) > target_limit:
+                        # Look for the last period or newline within the first 2500 chars
+                        cut_index = -1
+                        search_area = remaining_text[:target_limit]
+                        
+                        # Priority 1: Newline (Paragraph end)
+                        # Priority 2: Period (Sentence end)
+                        for separator in ['\n', '. ']:
+                            last_pos = search_area.rfind(separator)
+                            if last_pos > (target_limit * 0.7): # Only cut if we found a spot in the last 30% of the chunk
+                                cut_index = last_pos + len(separator)
+                                break
+                        
+                        # If no good sentence end found, force a cut at target_limit
+                        if cut_index == -1:
+                            cut_index = target_limit
+                        
+                        self.book_pages.append(remaining_text[:cut_index].strip())
+                        remaining_text = remaining_text[cut_index:].strip()
+                    
+                    # Add the final remaining piece
+                    if remaining_text:
+                        self.book_pages.append(remaining_text)
+
+                self.total_pages = len(self.book_pages)
+                
+                # 3. Progress management
                 if os.path.exists(book['save_file']):
                     with open(book['save_file'], 'rb') as f:
-                        self.current_page = pickle.load(f)
+                        saved_page = pickle.load(f)
+                        self.current_page = saved_page if saved_page < self.total_pages else 0
                 else:
                     self.current_page = 0
-            self.update_content()
-        except:
-            self.content_label.text = "Erro ao carregar livro."
+                
+                self.update_content()
+                
+            except Exception as e:
+                print(f"Error: {e}")
+                self.book_pages = ["Erro ao carregar o conteúdo."]
+                self.total_pages = 1
 
     def update_content(self):
-        if self.root_xml is not None:
-            page = self.root_xml.find(f"p{self.current_page}")
-            self.content_label.text = page.text if page is not None else "Fim do capítulo."
+        if hasattr(self, 'book_pages') and self.current_page < len(self.book_pages):
+            text = self.book_pages[self.current_page]
             
-            # Update Progress Bar
-            progress_pct = (self.current_page / max(1, self.total_pages - 3)) * 100
+            # Clean XML entities
+            text = text.replace('&apos;', "'").replace('&amp;', '&').replace('&quot;', '"')
+            
+            # Update the label
+            self.content_label.text = text
+            
+            # Reset ScrollView to the top when changing pages
+            if self.content_label.parent:
+                self.content_label.parent.scroll_y = 1
+            
+            # Update Progress
+            progress_pct = (self.current_page / max(1, self.total_pages - 1)) * 100
             self.progress_bar.value = progress_pct
             self.progress_label.text = f"{int(progress_pct)}%"
             
-            # Auto-save
-            with open(BOOKS[self.current_book_key]['save_file'], 'wb') as f:
-                pickle.dump(self.current_page, f)
+            # Save progress
+            try:
+                with open(BOOKS[self.current_book_key]['save_file'], 'wb') as f:
+                    pickle.dump(self.current_page, f)
+            except:
+                pass
 
     def on_next(self, instance):
-        if self.current_page < self.total_pages - 3:
+        if self.current_page < self.total_pages - 1:
             self.current_page += 1
             self.update_content()
 
